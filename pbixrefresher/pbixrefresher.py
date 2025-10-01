@@ -5,6 +5,7 @@ import argparse
 import psutil
 from pywinauto.application import Application
 from pywinauto import timings
+from pywinauto.keyboard import send_keys
 
 
 def type_keys(string, element):
@@ -18,8 +19,8 @@ def main():
 	parser.add_argument("workbook", help = "Path to .pbix file")
 	parser.add_argument("--workspace", help = "name of online Power BI service work space to publish in", default = "My workspace")
 	parser.add_argument("--refresh-timeout", help = "refresh timeout", default = 30000, type = int)
-	parser.add_argument("--no-publish", dest='publish', help="don't publish, just save", default = True, action = 'store_false' )
-	parser.add_argument("--init-wait", help = "initial wait time on startup", default = 15, type = int)
+	parser.add_argument("--publish", dest='publish', help="don't publish, just save", default = True, action = 'store_false' )
+	parser.add_argument("--init-wait", help = "initial wait time on startup", default = 25, type = int)
 	args = parser.parse_args()
 
 	timings.after_clickinput_wait = 1
@@ -27,6 +28,7 @@ def main():
 	WORKSPACE = args.workspace
 	INIT_WAIT = args.init_wait
 	REFRESH_TIMEOUT = args.refresh_timeout
+	FILE_NAME = args.workbook.split("\\")[-1]
 
 	# Kill running PBI
 	PROCNAME = "PBIDesktop.exe"
@@ -37,6 +39,7 @@ def main():
 	time.sleep(3)
 
 	# Start PBI and open the workbook
+	print(f"Now refreshing: {WORKBOOK}")
 	print("Starting Power BI")
 	os.system('start "" "' + WORKBOOK + '"')
 	print("Waiting ",INIT_WAIT,"sec")
@@ -45,54 +48,54 @@ def main():
 	# Connect pywinauto
 	print("Identifying Power BI window")
 	app = Application(backend = 'uia').connect(path = PROCNAME)
-	win = app.window(title_re = '.*Power BI Desktop')
+	win = app[FILE_NAME]
+	print("Window identified")
 	time.sleep(5)
-	win.wait("enabled", timeout = 300)
-	win.Save.wait("enabled", timeout = 300)
 	win.set_focus()
-	win.Home.click_input()
-	win.Save.wait("enabled", timeout = 300)
-	win.wait("enabled", timeout = 300)
+	win.wait("enabled", timeout=300)
 
 	# Refresh
 	print("Refreshing")
-	win.Refresh.click_input()
-	#wait_win_ready(win)
+	send_keys("{VK_MENU} h r {DOWN} {ENTER}", pause=0.2)
 	time.sleep(5)
 	print("Waiting for refresh end (timeout in ", REFRESH_TIMEOUT,"sec)")
 	win.wait("enabled", timeout = REFRESH_TIMEOUT)
 
 	# Save
 	print("Saving")
-	type_keys("%1", win)
-	#wait_win_ready(win)
-	time.sleep(5)
+	send_keys('^s')
 	win.wait("enabled", timeout = REFRESH_TIMEOUT)
+	time.sleep(5)
 
 	# Publish
 	if args.publish:
 		print("Publish")
-		win.Publish.click_input()
-		publish_dialog = win.child_window(auto_id = "KoPublishToGroupDialog")
-		publish_dialog.child_window(title = WORKSPACE).click_input()
-		publish_dialog.Select.click()
-		try:
-			win.Replace.wait('visible', timeout = 10)
-		except Exception:
-			pass
-		if win.Replace.exists():
-			win.Replace.click_input()
-		win["Got it"].wait('visible', timeout = REFRESH_TIMEOUT)
-		win["Got it"].click_input()
+		send_keys("{VK_MENU} h p ", pause=0.2)
+		time.sleep(2)
+		publish_dialog = win.child_window(title="Publish to Power BI", auto_id="mat-mdc-dialog-0", control_type="Group")
+		if publish_dialog.child_window(title = WORKSPACE).exists():
+			publish_dialog.child_window(title = WORKSPACE).click_input()
+			publish_dialog.child_window(title="Select", auto_id="okButton", control_type="Button").click_input()
+			try:
+				win.child_window(title="Replace", auto_id="okButton", control_type="Button").wait('visible', timeout = 10)
+			except Exception:
+				pass
+			if win.child_window(title="Replace", auto_id="okButton", control_type="Button").exists():
+				win.child_window(title="Replace", auto_id="okButton", control_type="Button").click_input()
+			win.child_window(title="Got it", control_type="Button").wait('visible', timeout = REFRESH_TIMEOUT)
+			win.child_window(title="Got it", control_type="Button").click_input()
+		else:
+			print("Workspace not found")
 
 	#Close
-	print("Exiting")
-	win.close()
+	# Workaround - window is "enabled" even if the save did not finish (corrupts files)
+	#attempt to close several times
+	while any(proc.name() == PROCNAME for proc in psutil.process_iter()):
+		print("Attempting to close")
+		win.close()
+		time.sleep(5)
 
-	# Force close
-	for proc in psutil.process_iter():
-		if proc.name() == PROCNAME:
-			proc.kill()
+	print("Refresh successful")
 
 		
 if __name__ == '__main__':
